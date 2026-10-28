@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panlink - Bio Link Platform</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { background-color: #030712; color: #f3f4f6; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+        .glass { background: rgba(17, 24, 39, 0.75); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glass-card { background: rgba(31, 41, 55, 0.5); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.05); }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between relative">
+
+    <!-- Canvas Background Angkasa Bergerak -->
+    <canvas id="spaceCanvas"></canvas>
+
+    <!-- App Container -->
+    <div id="app" class="w-full max-w-lg mx-auto p-4 my-auto z-10">
+        <div class="text-center py-20">
+            <i class="fas fa-spinner fa-spin text-4xl text-purple-500"></i>
+            <p class="mt-4 text-gray-400">Memuat Panlink...</p>
+        </div>
+    </div>
+
+    <!-- Audio Backsound Player -->
+    <audio id="bgAudio" loop></audio>
+    <div id="audioPlayerWidget" class="fixed bottom-4 right-4 z-50 hidden">
+        <button onclick="toggleAudio()" id="audioBtn" class="glass p-3 rounded-full shadow-lg text-purple-400 hover:text-white transition flex items-center justify-center w-12 h-12">
+            <i id="audioIcon" class="fas fa-music text-lg"></i>
+        </button>
+    </div>
+
+    <script>
+        const SUPABASE_URL = "https://cbooduqtcbumekonggcq.supabase.co";
+        const SUPABASE_ANON_KEY = "sb_publishable_S9MIJcVEq8vorOr5yBAhuw_0poIrAKE";
+
+        let db = null;
+        try {
+            if (window.supabase && window.supabase.createClient) {
+                db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            }
+        } catch (e) {
+            console.error("Gagal koneksi Supabase:", e);
+        }
+
+        // Canvas Starry Background
+        const canvas = document.getElementById('spaceCanvas');
+        const ctx = canvas.getContext('2d');
+        let stars = [];
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        for (let i = 0; i < 150; i++) {
+            stars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                radius: Math.random() * 1.5,
+                alpha: Math.random(),
+                speed: Math.random() * 0.05 + 0.01
+            });
+        }
+
+        function animateSpace() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ffffff';
+            stars.forEach(star => {
+                ctx.globalAlpha = star.alpha;
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+                ctx.fill();
+                star.alpha += star.speed;
+                if (star.alpha > 1 || star.alpha < 0) star.speed = -star.speed;
+            });
+            requestAnimationFrame(animateSpace);
+        }
+        animateSpace();
+
+        let isPlaying = false;
+        function setupAudio(url) {
+            const audio = document.getElementById('bgAudio');
+            const widget = document.getElementById('audioPlayerWidget');
+            if (url) {
+                audio.src = url;
+                widget.classList.remove('hidden');
+            } else {
+                widget.classList.add('hidden');
+            }
+        }
+        function toggleAudio() {
+            const audio = document.getElementById('bgAudio');
+            const icon = document.getElementById('audioIcon');
+            if (isPlaying) {
+                audio.pause();
+                icon.className = "fas fa-music text-lg";
+                isPlaying = false;
+            } else {
+                audio.play().then(() => {
+                    icon.className = "fas fa-volume-high text-lg animate-pulse";
+                    isPlaying = true;
+                }).catch(e => alert("Gagal memutar audio otomatis oleh browser."));
+            }
+        }
+
+        function togglePassword(fieldId, iconId) {
+            const input = document.getElementById(fieldId);
+            const icon = document.getElementById(iconId);
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'fas fa-eye-slash';
+            } else {
+                input.type = 'password';
+                icon.className = 'fas fa-eye';
+            }
+        }
+
+        function handleImageUpload(event, callback) {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (file.size > 2 * 1024 * 1024) {
+                alert("Ukuran file gambar terlalu besar! Pilih gambar di bawah 2MB.");
+                return;
+            }
+            const reader = new FileReader();
+            reader.onloadend = function () {
+                callback(reader.result);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function router() {
+            const hash = window.location.hash;
+            const params = new URLSearchParams(window.location.search);
+            const username = params.get('u');
+            const app = document.getElementById('app');
+
+            if (!app) return;
+
+            try {
+                if (username) {
+                    await renderPublicProfile(username, app);
+                } else if (hash === '#register') {
+                    renderRegister(app);
+                } else if (hash === '#dashboard') {
+                    await renderDashboard(app, 'links');
+                } else if (hash === '#dashboard/profile') {
+                    await renderDashboard(app, 'profile');
+                } else if (hash === '#login') {
+                    renderLogin(app);
+                } else {
+                    renderHome(app);
+                }
+            } catch (err) {
+                console.error("Router error:", err);
+                app.innerHTML = `<div class="glass p-8 rounded-2xl text-center"><h2 class="text-xl font-bold text-red-400">Terjadi kesalahan sistem</h2><p class="text-sm text-gray-300 mt-2">${err.message}</p><a href="#" class="text-purple-400 underline text-sm mt-4 inline-block">Kembali ke Beranda</a></div>`;
+            }
+        }
+
+        window.addEventListener('hashchange', router);
+        setTimeout(router, 50);
+
+        function renderHome(container) {
+            container.innerHTML = `
+                <div class="glass p-8 rounded-3xl shadow-2xl text-center space-y-6">
+                    <div class="inline-block p-4 bg-purple-600/20 rounded-2xl text-purple-400 mb-2 shadow-inner">
+                        <i class="fas fa-link text-4xl"></i>
+                    </div>
+                    <h1 class="text-4xl font-extrabold text-white tracking-wide">Panlink</h1>
+                    <p class="text-gray-300 text-sm leading-relaxed">Platform Bio Link modern yang elegan, cepat, dan mudah disesuaikan untuk seluruh tautan sosial media Anda.</p>
+                    <div class="space-y-3 pt-4">
+                        <a href="#login" class="block w-full bg-purple-600 hover:bg-purple-700 text-white font-bold p-3.5 rounded-xl transition shadow-lg shadow-purple-600/30">Login Admin</a>
+                        <a href="#register" class="block w-full bg-gray-800/80 hover:bg-gray-700 text-purple-300 font-bold p-3.5 rounded-xl transition border border-gray-700">Daftar Akun Baru</a>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLogin(container) {
+            container.innerHTML = `
+                <div class="glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-purple-400">Login Panlink</h2>
+                        <a href="#" class="text-gray-400 hover:text-white text-sm"><i class="fas fa-arrow-left"></i> Kembali</a>
+                    </div>
+                    <form id="loginForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 font-semibold uppercase">Email</label>
+                            <input type="email" id="email" required class="w-full bg-gray-900/80 border border-gray-700 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 font-semibold uppercase">Password</label>
+                            <div class="relative">
+                                <input type="password" id="password" required class="w-full bg-gray-900/80 border border-gray-700 rounded-xl p-3 pr-10 text-white focus:outline-none focus:border-purple-500 text-sm">
+                                <button type="button" onclick="togglePassword('password', 'eyeLogin')" class="absolute right-3 top-3.5 text-gray-400 hover:text-white">
+                                    <i id="eyeLogin" class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold p-3.5 rounded-xl transition shadow-lg shadow-purple-600/30">Masuk</button>
+                    </form>
+                    <p class="text-center text-sm text-gray-400 mt-6">Belum punya akun? <a href="#register" class="text-purple-400 hover:underline font-semibold">Daftar di sini</a></p>
+                </div>
+            `;
+            document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+                const { error } = await db.auth.signInWithPassword({ email, password });
+                if (error) alert(error.message);
+                else {
+                    window.location.hash = '#dashboard';
+                    router();
+                }
+            });
+        }
+
+        function renderRegister(container) {
+            container.innerHTML = `
+                <div class="glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-purple-400">Daftar Panlink</h2>
+                        <a href="#" class="text-gray-400 hover:text-white text-sm"><i class="fas fa-arrow-left"></i> Kembali</a>
+                    </div>
+                    <form id="regForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 font-semibold uppercase">Username Unik (untuk link)</label>
+                            <input type="text" id="username" required placeholder="contoh: budi" class="w-full bg-gray-900/80 border border-gray-700 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 font-semibold uppercase">Email</label>
+                            <input type="email" id="email" required class="w-full bg-gray-900/80 border border-gray-700 rounded-xl p-3 text-white focus:outline-none focus:border-purple-500 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1 font-semibold uppercase">Password</label>
+                            <div class="relative">
+                                <input type="password" id="password" required class="w-full bg-gray-900/80 border border-gray-700 rounded-xl p-3 pr-10 text-white focus:outline-none focus:border-purple-500 text-sm">
+                                <button type="button" onclick="togglePassword('password', 'eyeReg')" class="absolute right-3 top-3.5 text-gray-400 hover:text-white">
+                                    <i id="eyeReg" class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold p-3.5 rounded-xl transition shadow-lg shadow-purple-600/30">Daftar Akun</button>
+                    </form>
+                    <p class="text-center text-sm text-gray-400 mt-6">Sudah punya akun? <a href="#login" class="text-purple-400 hover:underline font-semibold">Login</a></p>
+                </div>
+            `;
+            document.getElementById('regForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const username = document.getElementById('username').value.trim().toLowerCase();
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+
+                // Mendaftar via Auth dengan mengirim metadata username
+                const { data: authData, error: authError } = await db.auth.signUp({ 
+                    email, 
+                    password,
+                    options: {
+                        data: { username: username }
+                    }
+                });
+
+                if (authError) { alert(authError.message); return; }
+
+                if (authData.user) {
+                    alert('Registrasi berhasil! Silakan login.');
+                    window.location.hash = '#login';
+                    router();
+                }
+            });
+        }
+
+        async function renderDashboard(container, activeTab = 'links') {
+            const { data: { user } } = await db.auth.getUser();
+            if (!user) { window.location.hash = '#login'; router(); return; }
+
+            let { data: profile } = await db.from('profiles').select('*').eq('id', user.id).single();
+
+            if (!profile) {
+                const defaultUsername = user.email.split('@')[0] + "_" + Math.floor(Math.random() * 1000);
+                const { data: newProfile } = await db.from('profiles').insert([
+                    { id: user.id, username: defaultUsername, full_name: defaultUsername, bio: 'Bio belum diatur' }
+                ]).select().single();
+                profile = newProfile;
+            }
+
+            const { data: links } = await db.from('links').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
+            const publicLinkUrl = window.location.origin + window.location.pathname + `?u=${profile.username}`;
+
+            container.innerHTML = `
+                <div class="glass p-6 rounded-3xl shadow-2xl space-y-6">
+                    <div class="flex justify-between items-center border-b border-gray-700/60 pb-4">
+                        <div>
+                            <h2 class="text-xl font-extrabold text-purple-400 flex items-center gap-2">
+                                <i class="fas fa-tachometer-alt"></i> Panel Admin
+                            </h2>
+                            <div class="flex items-center gap-2 mt-1">
+                                <span class="text-xs text-gray-400 truncate max-w-[180px]">${publicLinkUrl}</span>
+                                <button onclick="copyLink('${publicLinkUrl}')" class="bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-xs px-2 py-1 rounded-md transition flex items-center gap-1 border border-purple-500/30">
+                                    <i class="fas fa-copy"></i> Salin
+                                </button>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <a href="?u=${profile.username}" target="_blank" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1 shadow-lg shadow-emerald-600/20">
+                                <i class="fas fa-external-link-alt"></i> Preview
+                            </a>
+                            <button onclick="logout()" class="text-red-400 hover:text-red-300 text-xs bg-red-500/10 hover:bg-red-500/20 px-3 py-2 rounded-xl transition border border-red-500/20 font-semibold">
+                                <i class="fas fa-sign-out-alt"></i> Keluar
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex rounded-xl bg-gray-900/80 p-1 border border-gray-800">
+                        <button onclick="switchTab('links')" id="tabLinksBtn" class="flex-1 py-2 text-xs font-bold rounded-lg transition ${activeTab === 'links' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'}">
+                            <i class="fas fa-link mr-1"></i> Kelola Link
+                        </button>
+                        <button onclick="switchTab('profile')" id="tabProfileBtn" class="flex-1 py-2 text-xs font-bold rounded-lg transition ${activeTab === 'profile' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'}">
+                            <i class="fas fa-user-edit mr-1"></i> Edit Profil
+                        </button>
+                    </div>
+
+                    <div id="sectionLinks" class="${activeTab === 'links' ? 'space-y-6' : 'hidden'}">
+                        <form id="linkForm" class="glass-card p-4 rounded-2xl space-y-3">
+                            <h3 class="text-sm font-bold text-gray-200 flex items-center gap-2">
+                                <i class="fas fa-plus-circle text-purple-400"></i> Tambah Link Baru
+                            </h3>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">Judul Link</label>
+                                <input type="text" id="linkTitle" placeholder="contoh: Channel YouTube Saya" required class="w-full bg-gray-900/90 border border-gray-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">URL Tujuan</label>
+                                <input type="url" id="linkUrl" placeholder="https://youtube.com/..." required class="w-full bg-gray-900/90 border border-gray-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">Thumbnail / Gambar Link (Opsional)</label>
+                                <input type="file" id="linkThumbFile" accept="image/*" onchange="handleImageUpload(event, (res) => document.getElementById('linkThumbnail').value = res)" class="w-full text-xs text-gray-400 file:mr-2 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-purple-600/20 file:text-purple-300 hover:file:bg-purple-600/30">
+                                <input type="hidden" id="linkThumbnail">
+                            </div>
+                            <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold p-3 rounded-xl transition shadow-md shadow-purple-600/20">
+                                + Tambahkan Link ke Profil
+                            </button>
+                        </form>
+
+                        <div class="space-y-3">
+                            <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider">Daftar Link Aktif (${(links || []).length})</h3>
+                            <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
+                                ${(links || []).length === 0 ? `<p class="text-xs text-gray-500 text-center py-4">Belum ada link yang ditambahkan.</p>` : ''}
+                                ${(links || []).map(l => `
+                                    <div class="flex justify-between items-center bg-gray-900/80 p-3 rounded-xl border border-gray-800 text-sm gap-3">
+                                        <div class="flex items-center gap-3 truncate">
+                                            ${l.thumbnail ? `<img src="${l.thumbnail}" class="w-9 h-9 rounded-lg object-cover border border-gray-700 flex-shrink-0">` : `<div class="w-9 h-9 rounded-lg bg-purple-600/20 flex items-center justify-center text-purple-400 flex-shrink-0"><i class="fas fa-link text-xs"></i></div>`}
+                                            <div class="truncate">
+                                                <p class="font-bold text-white text-xs truncate">${l.title}</p>
+                                                <a href="${l.url}" target="_blank" class="text-gray-400 hover:text-purple-300 text-[11px] truncate block">${l.url}</a>
+                                            </div>
+                                        </div>
+                                        <button onclick="deleteLink(${l.id})" class="text-red-400 hover:text-red-300 p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg transition"><i class="fas fa-trash text-xs"></i></button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="sectionProfile" class="${activeTab === 'profile' ? 'space-y-4' : 'hidden'}">
+                        <form id="profileForm" class="glass-card p-4 rounded-2xl space-y-3">
+                            <h3 class="text-sm font-bold text-gray-200 flex items-center gap-2 mb-2">
+                                <i class="fas fa-user-cog text-purple-400"></i> Pengaturan Akun & Profil
+                            </h3>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">Username (URL Unik)</label>
+                                <input type="text" id="usernameInput" value="${profile.username || ''}" required class="w-full bg-gray-900/90 border border-gray-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">Nama Lengkap</label>
+                                <input type="text" id="fullName" value="${profile.full_name || ''}" placeholder="Nama Lengkap Anda" class="w-full bg-gray-900/90 border border-gray-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">Bio Singkat</label>
+                                <textarea id="bio" placeholder="Tulis bio singkat di sini..." class="w-full bg-gray-900/90 border border-gray-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-purple-500">${profile.bio || ''}</textarea>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">Foto Profil</label>
+                                <div class="flex items-center gap-3">
+                                    <img id="avatarPreview" src="${profile.avatar_url || 'https://via.placeholder.com/150'}" class="w-12 h-12 rounded-full object-cover border-2 border-purple-500 flex-shrink-0">
+                                    <input type="file" id="avatarFile" accept="image/*" onchange="handleImageUpload(event, (res) => { document.getElementById('avatarUrl').value = res; document.getElementById('avatarPreview').src = res; })" class="w-full text-xs text-gray-400 file:mr-2 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-purple-600/20 file:text-purple-300 hover:file:bg-purple-600/30">
+                                </div>
+                                <input type="hidden" id="avatarUrl" value="${profile.avatar_url || ''}">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1 font-semibold">URL Musik MP3 (Backsound)</label>
+                                <input type="text" id="backsoundUrl" value="${profile.backsound_url || ''}" placeholder="https://.../audio.mp3" class="w-full bg-gray-900/90 border border-gray-700 rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                            </div>
+                            <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold p-3 rounded-xl transition shadow-md shadow-purple-600/20 mt-2">
+                                Simpan Perubahan Profil
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('profileForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const newUsername = document.getElementById('usernameInput').value.trim().toLowerCase();
+                const { error } = await db.from('profiles').update({
+                    username: newUsername,
+                    full_name: document.getElementById('fullName').value,
+                    bio: document.getElementById('bio').value,
+                    avatar_url: document.getElementById('avatarUrl').value,
+                    backsound_url: document.getElementById('backsoundUrl').value
+                }).eq('id', user.id);
+                
+                if (error) alert("Gagal memperbarui profil: " + error.message);
+                else {
+                    alert('Profil berhasil diperbarui!');
+                    router();
+                }
+            });
+
+            document.getElementById('linkForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const title = document.getElementById('linkTitle').value;
+                const url = document.getElementById('linkUrl').value;
+                const thumbnail = document.getElementById('linkThumbnail').value || null;
+
+                let { error } = await db.from('links').insert([{
+                    user_id: user.id,
+                    title: title,
+                    url: url,
+                    thumbnail: thumbnail
+                }]);
+
+                if (error && error.message.includes('thumbnail')) {
+                    const fallback = await db.from('links').insert([{
+                        user_id: user.id,
+                        title: title,
+                        url: url
+                    }]);
+                    error = fallback.error;
+                }
+
+                if (error) {
+                    alert("Gagal menambahkan link: " + error.message);
+                } else {
+                    document.getElementById('linkTitle').value = '';
+                    document.getElementById('linkUrl').value = '';
+                    document.getElementById('linkThumbnail').value = '';
+                    document.getElementById('linkThumbFile').value = '';
+                    router();
+                }
+            });
+        }
+
+        function switchTab(tabName) {
+            if (tabName === 'links') {
+                window.location.hash = '#dashboard';
+            } else {
+                window.location.hash = '#dashboard/profile';
+            }
+        }
+
+        function copyLink(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Link berhasil disalin ke clipboard!');
+            }).catch(err => {
+                alert('Gagal menyalin link.');
+            });
+        }
+
+        async function logout() {
+            await db.auth.signOut();
+            window.location.hash = '#login';
+            router();
+        }
+
+        async function deleteLink(id) {
+            if (confirm('Hapus link ini?')) {
+                await db.from('links').delete().eq('id', id);
+                router();
+            }
+        }
+
+        async function renderPublicProfile(username, container) {
+            const { data: profile } = await db.from('profiles').select('*').eq('username', username).single();
+            if (!profile) {
+                container.innerHTML = `
+                    <div class="glass p-8 rounded-3xl text-center space-y-4">
+                        <h2 class="text-xl font-bold text-red-400">Profil tidak ditemukan</h2>
+                        <p class="text-xs text-gray-300">Username "@${username}" belum terdaftar di Panlink.</p>
+                        <a href="#" class="inline-block bg-purple-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition">Kembali ke Beranda</a>
+                    </div>`;
+                return;
+            }
+
+            const { data: links } = await db.from('links').select('*').eq('user_id', profile.id).order('created_at', { ascending: true });
+
+            if (profile.backsound_url) {
+                setupAudio(profile.backsound_url);
+            }
+
+            container.innerHTML = `
+                <div class="flex flex-col items-center space-y-6 relative">
+                    <div class="w-full flex justify-start">
+                        <a href="#" class="glass px-3 py-1.5 rounded-xl text-xs text-gray-300 hover:text-white transition flex items-center gap-1.5 border border-white/10">
+                            <i class="fas fa-arrow-left"></i> Beranda Panlink
+                        </a>
+                    </div>
+
+                    <div class="flex flex-col items-center space-y-3 text-center">
+                        <img src="${profile.avatar_url || 'https://via.placeholder.com/150'}" class="w-24 h-24 rounded-full border-4 border-purple-500/50 object-cover shadow-2xl shadow-purple-600/30" alt="Avatar">
+                        <h1 class="text-xl font-bold text-white tracking-wide">${profile.full_name || profile.username}</h1>
+                        <p class="text-xs text-gray-300 max-w-xs leading-relaxed">${profile.bio || ''}</p>
+                    </div>
+                    
+                    <div class="w-full space-y-3 pt-2">
+                        ${(links || []).length === 0 ? `<p class="text-xs text-gray-400 text-center py-6 glass rounded-2xl">Belum ada link yang dipublikasikan.</p>` : ''}
+                        ${(links || []).map(l => `
+                            <a href="${l.url}" target="_blank" class="group flex items-center justify-between w-full glass p-3.5 rounded-2xl font-medium text-white hover:bg-purple-600/30 hover:border-purple-500/50 transition-all duration-300 shadow-xl border border-white/10">
+                                <div class="flex items-center gap-3 truncate">
+                                    ${l.thumbnail ? `<img src="${l.thumbnail}" class="w-10 h-10 rounded-xl object-cover border border-white/10 flex-shrink-0 group-hover:scale-105 transition">` : `<div class="w-10 h-10 rounded-xl bg-purple-600/20 flex items-center justify-center text-purple-400 flex-shrink-0"><i class="fas fa-globe text-sm"></i></div>`}
+                                    <span class="text-sm font-semibold truncate group-hover:text-purple-200 transition">${l.title}</span>
+                                </div>
+                                <i class="fas fa-chevron-right text-xs text-gray-400 group-hover:translate-x-1 transition mr-1"></i>
+                            </a>
+                        `).join('')}
+                    </div>
+
+                    <div class="pt-6 text-center">
+                        <a href="#" class="text-[10px] text-gray-500 hover:text-purple-400 transition tracking-widest uppercase font-bold">Powered by Panlink</a>
+                    </div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
